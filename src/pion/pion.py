@@ -134,6 +134,7 @@ class Pion(DroneBase):
             port_or_baudrate=mavlink_port,
         )
         self._heartbeat_timeout: float = 1.0
+        self._connection_timeout: float = 1.5
         self._mavlink_send_number: int = 10
         self.__is_socket_open: threading.Event = threading.Event()
         self.__is_socket_open.set()
@@ -145,6 +146,8 @@ class Pion(DroneBase):
         self.period_message_handler: float = dt
         self.connection_lost: bool = False
         self.max_speed: float = 1.0
+        self.connection: bool = False
+        self.last_message_time: float = 0.
         # Используется для хранения последних count_of_checking_points данных в виде [x, y, z] для верификации достижения таргетной точки
         self.last_points: Annotated[
             NDArray[Any], (count_of_checking_points,)
@@ -246,27 +249,18 @@ class Pion(DroneBase):
         """
         Полет к указанной точке в текущей системе координат навигации.
 
-        .. warning::
-            Данная функуция выполняется при запуске вычислений с **дрона**.
-
-        .. note::
-            Координаты задаются в ENU (East-North-Up) системе координат, но будут автоматически
-            преобразованы в NED (North-East-Down).
-
         :param x: Координата по оси X в ENU (East-North-Up) системе координат.
         :type x: float | int
-
         :param y: Координата по оси Y в ENU (East-North-Up) системе координат.
         :type y: float | int
-
         :param z: Координата по оси Z (высота) в ENU (East-North-Up) системе координат.
         :type z: float | int
-
         :param yaw: Угол курса, на который должен повернуться дрон. По умолчанию 0.
         :type yaw: float | int, Optional
-
         :return: None
 
+        :note: Координаты задаются в ENU (East-North-Up) системе координат, но будут автоматически преобразованы
+            в NED (North-East-Down).
         """
         self.tracking = False
         mask = 0b0000_10_0_111_111_000
@@ -326,34 +320,21 @@ class Pion(DroneBase):
         wait: bool = False,
     ) -> None:
         """
-        Метод достижения целевой позиции.
-
-        .. warning::
-            Данная функуция выполняется при запуске вычислений с **внешнего устройства - ПК**.
-
-        Функция берет целевую координату и вычисляет необходимые скорости для
-        достижения целевой позиции, посылая их в управление t_speed.Для использования
-        необходимо включить цикл :py:meth:`Pion.v_while` для посылки вектора скорости дрону.
-        Максимальная скорость обрезается np.clip по полю self.max_speed
+        Метод достижения целевой позиции
 
         :param x: координата по x
         :type x: float
-
         :param y: координата по y
         :type y: float
-
         :param z: координата по z
         :type z: float
-
         :param yaw: координата по yaw
         :type yaw: float
-
         :param accuracy: Погрешность целевой точки
         :type accuracy: Optional[float]
-
-        :param wait: Блокировка основного потока если True, запуск процесса в отдельном потоке, если False
+        :param wait: Блокировка основного потока если True,
+        запуск процесса в отдельном потоке, если False
         :type wait: bool
-
         :return: None
         """
         if wait:
@@ -734,6 +715,8 @@ class Pion(DroneBase):
                     self._msg = self.mavlink_socket.recv_msg()
                     if self._msg is not None:
                         self._process_message(self._msg, src_component)
+                else:
+                    self.connection = (time.time() - self.last_message_time) < self._connection_timeout
                 if self.check_attitude_flag:
                     self.attitude_write()
                 if self.logger:
@@ -781,6 +764,9 @@ class Pion(DroneBase):
             self.last_angles = update_vector(self.last_angles, self.yaw)
         elif msg.get_type() == "BATTERY_STATUS":
             self.battery_voltage = msg.voltages[0] / 100
+        elif msg.get_type() == "HEARTBEAT":
+            self.connection = True
+            self.last_message_time = time.time()
 
     def rc_while(self) -> None:
         """
@@ -796,9 +782,9 @@ class Pion(DroneBase):
 
     def set_rc(self) -> None:
         """
-        Создает поток, который вызывает функцию :py:meth:`Pion.rc_while` для параллельной отправки управляющего сигнала rc channels
+        Создает поток, который вызывает функцию rc_while() для параллельной отправки управляющего сигнала rc channels
 
-        :return: None
+        :return:
         """
         if not self.set_rc_check_flag and not self.set_v_check_flag:
             self.rc_flag = True
