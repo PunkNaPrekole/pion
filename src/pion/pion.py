@@ -145,6 +145,8 @@ class Pion(DroneBase):
         self.period_message_handler: float = dt
         self.connection_lost: bool = False
         self.max_speed: float = 1.0
+        self.connection = False
+        self._last_message_time: float = 0.
         # Используется для хранения последних count_of_checking_points данных в виде [x, y, z] для верификации достижения таргетной точки
         self.last_points: Annotated[
             NDArray[Any], (count_of_checking_points,)
@@ -733,7 +735,12 @@ class Pion(DroneBase):
                 if rlist:
                     self._msg = self.mavlink_socket.recv_msg()
                     if self._msg is not None:
+                        self.connection = True
+                        self.last_message_time = time.time()
                         self._process_message(self._msg, src_component)
+                    else:
+                        self.connection = (time.time() - self.last_message_time) < self._heartbeat_timeout
+
                 if self.check_attitude_flag:
                     self.attitude_write()
                 if self.logger:
